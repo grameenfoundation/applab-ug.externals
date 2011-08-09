@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.Date;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.Vector;
 
 import org.purc.purcforms.client.controller.QuestionChangeListener;
@@ -85,15 +86,14 @@ public class QuestionDef implements Serializable{
 
 	/** The allowed set of values (OptionDef) for an answer of the question. 
 	 * This also holds repeat sets of questions (RepeatQtnsDef) for the QTN_TYPE_REPEAT.
-	 * This is an optimization aspect to prevent storing these guys diffently as 
+	 * This is an optimization aspect to prevent storing these guys differently as 
 	 * they can't both happen at the same time. The internal storage implementation of these
 	 * repeats is hidden from the user by means of getRepeatQtnsDef() and setRepeatQtnsDef().
 	 */
 	private Object options;
 
 	/** The numeric identifier of a question. When a form definition is being built, each question is 
-	 * given a unique (on a form) id starting from 1 up to 127. The assumption is that one will never need to have
-	 * a form with more than 127 questions for a mobile device (It would be too big).
+	 * given a unique (on a form) id starting from 1 .
 	 */
 	private int id = ModelConstants.NULL_ID;
 
@@ -176,6 +176,11 @@ public class QuestionDef implements Serializable{
 	 * just another question as for repeat question kids. 
 	 */
 	private Object parent;
+	
+	/** The xpath expression pointing to the corresponding node in the xforms document. */
+	private String xpathExpressionLabel;
+	private String xpathExpressionHint;
+	
 
 
 	/** This constructor is used mainly during deserialization. */
@@ -196,6 +201,8 @@ public class QuestionDef implements Serializable{
 		setLocked(questionDef.isLocked());
 		setRequired(questionDef.isRequired());
 		setBinding(questionDef.getBinding());
+		this.xpathExpressionLabel = questionDef.xpathExpressionLabel;
+		this.xpathExpressionHint = questionDef.xpathExpressionHint;
 
 		if(getDataType() == QuestionDef.QTN_TYPE_LIST_EXCLUSIVE || getDataType() == QuestionDef.QTN_TYPE_LIST_MULTIPLE)
 			copyQuestionOptions(questionDef.getOptions());
@@ -311,6 +318,9 @@ public class QuestionDef implements Serializable{
 
 	public void setAnswer(String answer) {
 		//if(defaultValue != null && defaultValue.trim().length() > 0)
+		if(answer != null && answer.trim().length() > 0 && getDataType() == QuestionDef.QTN_TYPE_DECIMAL)
+			answer = answer.replace(FormUtil.getDecimalSeparator(), FormUtil.SAVE_DECIMAL_SEPARATOR);
+		
 		this.answer = answer;
 	}
 
@@ -665,7 +675,7 @@ public class QuestionDef implements Serializable{
 					OptionDef optnDef = getNextSavedOption(list,i); //(OptionDef)list.get(i);
 					if(optnDef.getControlNode() != null && optionDef.getControlNode() != null)
 						controlNode.insertBefore(optionDef.getControlNode(), optnDef.getControlNode());
-					else
+					else if(optionDef.getControlNode() != null)
 						controlNode.appendChild(optionDef.getControlNode());
 				}
 			}
@@ -690,7 +700,7 @@ public class QuestionDef implements Serializable{
 		return (OptionDef)options.get(index);
 	}
 
-	public boolean updateDoc(Document doc, Element xformsNode, FormDef formDef, Element formNode, Element modelNode,Element groupNode,boolean appendParentBinding, boolean withData, String orgFormVarName){
+	public boolean updateDoc(Document doc, Element xformsNode, FormDef formDef, Element formNode, Element modelNode,Element groupNode,boolean appendParentBinding, boolean withData, String orgFormVarName, String parentBinding){
 		boolean isNew = controlNode == null;
 		if(controlNode == null) //Must be new question.
 			UiElementBuilder.fromQuestionDef2Xform(this,doc,xformsNode,formDef,formNode,modelNode,groupNode);
@@ -702,17 +712,33 @@ public class QuestionDef implements Serializable{
 
 		Element node = bindNode;
 		if(node == null){
-			//We are using a ref instead of bind
+			/*//We are using a ref instead of bind
 			node = controlNode;
-			appendParentBinding = false;
+			appendParentBinding = false;*/
+			
+			node = doc.createElement(XformConstants.NODE_NAME_BIND);
+			node.setAttribute(XformConstants.ATTRIBUTE_NAME_ID, this.binding);
+			node.setAttribute(XformConstants.ATTRIBUTE_NAME_NODESET, binding); //Will ensure that nodeset gets set below.
+			
+			if(FormUtil.isJavaRosaSaveFormat())
+				insertBeforeLastChild(formDef.getModelNode(), node); //Insert before itext
+			else
+				formDef.getModelNode().appendChild(node);
+			
+			bindNode = node;
 		}
 
 		if(node != null){
 			String binding = this.binding;
 			if(!binding.startsWith("/"+ formDef.getBinding()+"/") && appendParentBinding){
 				//if(!binding.contains("/"+ formDef.getVariableName()+"/"))
-				if(!binding.startsWith(formDef.getBinding()+"/"))
-					binding = "/"+ formDef.getBinding()+"/" + binding;
+				if(!binding.startsWith(formDef.getBinding()+"/")){
+					if(parentBinding != null && !binding.contains("/"))
+						binding = "/"+ formDef.getBinding()+"/" + parentBinding + "/" + binding;
+					else{
+						binding = "/"+ formDef.getBinding() + (binding.startsWith("/") ? "" : "/") + binding;
+					}
+				}
 				else{
 					this.binding = "/" + this.binding; //correct user binding syntax error
 					binding = this.binding;
@@ -1137,19 +1163,23 @@ public class QuestionDef implements Serializable{
 		if(dataType == QuestionDef.QTN_TYPE_LIST_EXCLUSIVE ||
 				dataType == QuestionDef.QTN_TYPE_LIST_MULTIPLE){
 			if(options != null){
-				List optns = (List)options;
-				for(int i=0; i<optns.size(); i++){
-					OptionDef optionDef = (OptionDef)optns.get(i);
-					updateOptionNodeChildren(optionDef);
-					if(i == 0)
-						firstOptionNode = optionDef.getControlNode();
-				}
+				updateOptionNodeChildren();
 			}
 		}
 		else if(dataType == QuestionDef.QTN_TYPE_LIST_EXCLUSIVE_DYNAMIC){
 			list = controlNode.getElementsByTagName(XformConstants.NODE_NAME_ITEMSET_MINUS_PREFIX);
 			if(list.getLength() > 0)
 				firstOptionNode = (Element)list.item(0);
+		}
+	}
+	
+	private void updateOptionNodeChildren(){
+		List optns = (List)options;
+		for(int i=0; i<optns.size(); i++){
+			OptionDef optionDef = (OptionDef)optns.get(i);
+			updateOptionNodeChildren(optionDef);
+			if(i == 0)
+				firstOptionNode = optionDef.getControlNode();
 		}
 	}
 
@@ -1232,7 +1262,7 @@ public class QuestionDef implements Serializable{
 		List list = (List)options;
 		for(int i=0; i<list.size(); i++){
 			OptionDef optionDef = (OptionDef)list.get(i);
-			if(optionDef.getVariableName().equals(value))
+			if(optionDef.getBinding().equals(value))
 				return optionDef;
 		}
 		return null;
@@ -1283,13 +1313,18 @@ public class QuestionDef implements Serializable{
 
 		for(int i=0; i<getOptions().size(); i++){
 			OptionDef def = (OptionDef)getOptions().get(i);
-			if(def.getVariableName().equals(varName))
+			if(def.getBinding().equals(varName))
 				return i;
 		}
 
 		return -1;
 	}
 
+	/**
+	 * Updates this questionDef's options (as the main) with the parameter one (which is the old)
+	 * 
+	 * @param questionDef the old question before the refresh
+	 */
 	private void refreshOptions(QuestionDef questionDef){
 		List options2 = questionDef.getOptions();
 		if(options == null || options2 == null)
@@ -1300,7 +1335,7 @@ public class QuestionDef implements Serializable{
 		
 		for(int index = 0; index < options2.size(); index++){
 			OptionDef optn = (OptionDef)options2.get(index);
-			OptionDef optionDef = this.getOptionWithValue(optn.getVariableName());
+			OptionDef optionDef = this.getOptionWithValue(optn.getBinding());
 			if(optionDef == null){
 				missingOptns.add(optn);
 				continue;
@@ -1309,6 +1344,24 @@ public class QuestionDef implements Serializable{
 			optionDef.setText(optn.getText());
 
 			orderedOptns.add(optionDef); //add the option in the order it was before the refresh.
+			
+			
+			//Preserve the previous option ordering even in the xforms document nodes.
+			int newIndex = ((List)options).indexOf(optionDef);
+			if(index != newIndex){
+				if(newIndex < index){
+					while(newIndex < index){
+						moveOptionDown(optionDef);
+						newIndex++;
+					}
+				}
+				else{
+					while(newIndex > index){
+						moveOptionUp(optionDef);
+						newIndex--;
+					}
+				}
+			}
 
 			/*int index1 = this.getOptionIndex(optn.getVariableName());
 			if(index != index1 && index1 != -1 && index < this.getOptionCount() - 1){
@@ -1323,16 +1376,17 @@ public class QuestionDef implements Serializable{
 		int count = getOptionCount();
 		for(int index = 0; index < count; index++){
 			OptionDef optionDef = getOptionAt(index);
-			if(questionDef.getOptionWithValue(optionDef.getVariableName()) == null){
+			if(questionDef.getOptionWithValue(optionDef.getBinding()) == null){
 				
 				//TODO Make sure this is not buggy.
 				//If before refresh number of options is the same as the new number,
 				//then we preserve the old option text and binding by replacing new
 				//ones with the old values.
 				if(oldCount == count){
-					OptionDef optnDef = questionDef.getOptionAt(index);
-					optionDef.setBinding(optnDef.getVariableName());
-					optionDef.setText(optnDef.getText());
+					//Commented out because its really buggy. When provider id changes, it adds duplicate and with same old id.
+					/*OptionDef optnDef = questionDef.getOptionAt(index);
+					optionDef.setBinding(optnDef.getBinding());
+					optionDef.setText(optnDef.getText());*/
 				}
 				
 				orderedOptns.add(optionDef);
@@ -1343,7 +1397,7 @@ public class QuestionDef implements Serializable{
 		//original server side form.
 		for(int index = 0; index < missingOptns.size(); index++){
 			OptionDef optnDef = missingOptns.get(index);
-			orderedOptns.add(new OptionDef((orderedOptns.size() + index + 1), optnDef.getText(), optnDef.getVariableName(), this));
+			orderedOptns.add(new OptionDef((orderedOptns.size() + index + 1), optnDef.getText(), optnDef.getBinding(), this));
 		}
 
 		options = orderedOptns;
@@ -1431,7 +1485,7 @@ public class QuestionDef implements Serializable{
 	 * @param parentXformNode the parent xforms node for this question.
 	 * @param parentLangNode the parent language node we are building onto.
 	 */
-	public void buildLanguageNodes(String parentXpath, com.google.gwt.xml.client.Document doc, Element parentXformNode, Element parentLangNode){
+	public void buildLanguageNodes(String parentXpath, com.google.gwt.xml.client.Document doc, Element parentXformNode, Element parentLangNode, Map<String, String> changedXpaths){
 		if(controlNode == null)
 			return;
 
@@ -1458,26 +1512,44 @@ public class QuestionDef implements Serializable{
 
 		if(labelNode != null){
 			Element node = doc.createElement(XformConstants.NODE_NAME_TEXT);
-			node.setAttribute(XformConstants.ATTRIBUTE_NAME_XPATH, xpath + "/" + FormUtil.getNodeName(labelNode));
+			String newXpath = xpath + "/" + FormUtil.getNodeName(labelNode);
+			node.setAttribute(XformConstants.ATTRIBUTE_NAME_XPATH, newXpath);
+			
+			//Store the old xpath expression for localization processing which identifies us by the previous value.
+			if(this.xpathExpressionLabel != null && !newXpath.equalsIgnoreCase(this.xpathExpressionLabel)){
+				node.setAttribute(XformConstants.ATTRIBUTE_NAME_PREV_XPATH, this.xpathExpressionLabel);
+				changedXpaths.put(this.xpathExpressionLabel, newXpath);
+			}
+			this.xpathExpressionLabel = newXpath;
+			
 			node.setAttribute(XformConstants.ATTRIBUTE_NAME_VALUE, text);
 			parentLangNode.appendChild(node);
 		}
 
 		if(hintNode != null && helpText != null){
 			Element node = doc.createElement(XformConstants.NODE_NAME_TEXT);
-			node.setAttribute(XformConstants.ATTRIBUTE_NAME_XPATH, xpath + "/" + FormUtil.getNodeName(hintNode));
+			String newXpath = xpath + "/" + FormUtil.getNodeName(hintNode);
+			node.setAttribute(XformConstants.ATTRIBUTE_NAME_XPATH, newXpath);
+			
+			//Store the old xpath expression for localization processing which identifies us by the previous value.
+			if(this.xpathExpressionHint != null && !newXpath.equalsIgnoreCase(this.xpathExpressionHint)){
+				node.setAttribute(XformConstants.ATTRIBUTE_NAME_PREV_XPATH, this.xpathExpressionHint);
+				changedXpaths.put(this.xpathExpressionHint, newXpath);
+			}
+			this.xpathExpressionHint = newXpath;
+			
 			node.setAttribute(XformConstants.ATTRIBUTE_NAME_VALUE, helpText);
 			parentLangNode.appendChild(node);
 		}
 
 		if(dataType == QuestionDef.QTN_TYPE_REPEAT)
-			getRepeatQtnsDef().buildLanguageNodes(parentXpath,doc,parentXformNode,parentLangNode);
+			getRepeatQtnsDef().buildLanguageNodes(parentXpath,doc,parentXformNode,parentLangNode, changedXpaths);
 
 		if(dataType == QuestionDef.QTN_TYPE_LIST_EXCLUSIVE || dataType == QuestionDef.QTN_TYPE_LIST_MULTIPLE){
 			if(options != null){
 				List optionsList = (List)options;
 				for(int index = 0; index < optionsList.size(); index++)
-					((OptionDef)optionsList.get(index)).buildLanguageNodes(xpath, doc, parentLangNode);
+					((OptionDef)optionsList.get(index)).buildLanguageNodes(xpath, doc, parentLangNode, changedXpaths);
 			}
 		}
 	}
@@ -1507,6 +1579,17 @@ public class QuestionDef implements Serializable{
 		if(pos1 > -1 && pos2 > -1 && (pos2 > pos1))
 			displayText = displayText.replace(displayText.substring(pos1,pos2+2),"");
 		return displayText;
+	}
+	
+	private void insertBeforeLastChild(Element parent, Element node){
+		NodeList nodes = parent.getChildNodes();
+		for(int index = nodes.getLength() - 1; index >= 0; index--){
+			Node child = nodes.item(index);
+			if(child.getNodeType() == Node.ELEMENT_NODE){
+				parent.insertBefore(node, child);
+				return;
+			}
+		}
 	}
 }
 

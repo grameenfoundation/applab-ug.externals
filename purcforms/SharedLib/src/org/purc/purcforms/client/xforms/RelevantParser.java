@@ -7,6 +7,7 @@ import java.util.Vector;
 import org.purc.purcforms.client.model.Condition;
 import org.purc.purcforms.client.model.FormDef;
 import org.purc.purcforms.client.model.ModelConstants;
+import org.purc.purcforms.client.model.OptionDef;
 import org.purc.purcforms.client.model.QuestionDef;
 import org.purc.purcforms.client.model.SkipRule;
 
@@ -46,6 +47,12 @@ public class RelevantParser {
 			QuestionDef qtn = (QuestionDef)keys.next();
 			String relevant = (String)relevants.get(qtn);
 
+			if(relevant.startsWith("("))
+				relevant = relevant.substring(1);
+			
+			if(relevant.endsWith(")") && !QuestionDef.isDateFunction(relevant))
+				relevant = relevant.substring(0, relevant.length() - 1);
+			
 			//If there is a skip rule with the same relevant as the current
 			//then just add this question as another action target to the skip
 			//rule instead of creating a new skip rule.
@@ -117,6 +124,38 @@ public class RelevantParser {
 				conditions.add(condition);
 		}
 
+		//TODO Commented out because of being buggy when form is refreshed
+		//Preserve the between operator
+		/*if( (relevant.contains(" and ") && relevant.contains(">") && relevant.contains("<") ) &&
+				(conditions.size() == 2 || (conditions.size() == 3 && XformParserUtil.getConditionsOperator(relevant) == ModelConstants.CONDITIONS_OPERATOR_OR)) ){
+
+			condition  = new Condition();
+			condition.setId(((Condition)conditions.get(0)).getId());
+			condition.setOperator(ModelConstants.OPERATOR_BETWEEN);
+			condition.setQuestionId(((Condition)conditions.get(0)).getQuestionId());
+			if(relevant.contains("length(.)") || relevant.contains("count(.)"))
+				condition.setFunction(ModelConstants.FUNCTION_LENGTH);
+			
+			condition.setValue(((Condition)conditions.get(0)).getValue());
+			condition.setSecondValue(((Condition)conditions.get(1)).getValue());
+			
+			//This is just for the designer
+			if(condition.getValue().startsWith(formDef.getBinding() + "/"))
+				condition.setValueQtnDef(formDef.getQuestion(condition.getValue().substring(condition.getValue().indexOf('/')+1)));
+			else
+				condition.setBindingChangeListener(formDef.getQuestion(((Condition)conditions.get(0)).getQuestionId()));
+			
+			Condition cond = null;
+			if(conditions.size() == 3)
+				cond = (Condition)conditions.get(2);
+			
+			conditions.clear();
+			conditions.add(condition);
+			
+			if(cond != null)
+				conditions.add(cond);
+		}*/
+		
 		return conditions;
 	}
 
@@ -170,10 +209,12 @@ public class RelevantParser {
 		value = value.trim();
 		if(!(value.equals("null") || value.equals(""))){
 			condition.setValue(value);
-
+			
 			//This is just for the designer
 			if(value.startsWith(formDef.getBinding() + "/"))
 				condition.setValueQtnDef(formDef.getQuestion(value.substring(value.indexOf('/')+1)));
+			else
+				condition.setBindingChangeListener(questionDef);
 
 			if(condition.getOperator() == ModelConstants.OPERATOR_NULL)
 				return null; //no operator set hence making the condition invalid

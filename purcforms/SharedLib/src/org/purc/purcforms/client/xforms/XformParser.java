@@ -406,7 +406,7 @@ public class XformParser {
 				//Ids are mandatory for uniquely identifying items for localization xpath expressions.
 				String id = element.getAttribute(XformConstants.ATTRIBUTE_NAME_ID);
 				if(id == null || id.trim().length() == 0)
-					element.setAttribute(XformConstants.ATTRIBUTE_NAME_ID, optionDef.getVariableName());
+					element.setAttribute(XformConstants.ATTRIBUTE_NAME_ID, optionDef.getBinding());
 			}
 		} 
 		else if (!nodeContext.getLabel().equals("") && questionDef != null){
@@ -570,7 +570,11 @@ public class XformParser {
 		if(child.getAttribute(XformConstants.ATTRIBUTE_NAME_VISIBLE) != null && child.getAttribute(XformConstants.ATTRIBUTE_NAME_VISIBLE).equals(XformConstants.XPATH_VALUE_FALSE))
 			qtn.setVisible(false);
 
-		qtn.setBinding(((ref != null) ? ref : bind));
+		String binding = ((ref != null) ? ref : bind);
+		if(binding.startsWith("/"+formDef.getBinding()+"/"))
+			binding = binding.replace("/"+formDef.getBinding()+"/", "");
+		
+		qtn.setBinding(binding);
 		formDef.addQuestion(qtn);
 
 		if(child.getAttribute(XformConstants.ATTRIBUTE_NAME_RELEVANT) != null)
@@ -604,7 +608,7 @@ public class XformParser {
 			}
 		}
 
-		formDef.setVariableName(XmlUtil.getNodeName(dataNode));
+		formDef.setBinding(XmlUtil.getNodeName(dataNode));
 		if(dataNode.getAttribute(XformConstants.ATTRIBUTE_NAME_DESCRIPTION_TEMPLATE) != null)
 			formDef.setDescriptionTemplate(dataNode.getAttribute(XformConstants.ATTRIBUTE_NAME_DESCRIPTION_TEMPLATE));
 
@@ -615,8 +619,10 @@ public class XformParser {
 			catch(Exception ex){/*We may have non numeric ids like for odk. We just ignore them.*/}
 		}
 
-		if(dataNode.getAttribute(XformConstants.ATTRIBUTE_NAME_NAME) != null)
+		if((!FormUtil.isJavaRosaSaveFormat() || (formDef.getName() == null || formDef.getName().trim().length() == 0)) 
+				&& dataNode.getAttribute(XformConstants.ATTRIBUTE_NAME_NAME) != null){
 			formDef.setName(dataNode.getAttribute(XformConstants.ATTRIBUTE_NAME_NAME));
+		}
 
 		if(dataNode.getAttribute(XformConstants.ATTRIBUTE_NAME_FORM_KEY) != null)
 			formDef.setFormKey(dataNode.getAttribute(XformConstants.ATTRIBUTE_NAME_FORM_KEY));
@@ -649,7 +655,8 @@ public class XformParser {
 		String parentName = ((Element)child.getParentNode()).getNodeName();
 		//if(!(parentName.equalsIgnoreCase(NODE_NAME_GROUP)||parentName.equalsIgnoreCase(NODE_NAME_GROUP_MINUS_PREFIX))){
 		if(!XmlUtil.nodeNameEquals(parentName,XformConstants.NODE_NAME_GROUP_MINUS_PREFIX)){
-			if(formDef.getPageCount() < ++currentPageNo)
+			currentPageNo++;
+			if(formDef.getPageCount() < currentPageNo || formDef.getPageCount() < pageNo)
 				formDef.addPage();
 			else if(questionDef != null){
 				NodeList nodes = child.getElementsByTagName(XformConstants.NODE_NAME_REPEAT_MINUS_PREFIX);
@@ -823,14 +830,30 @@ public class XformParser {
 				varName = (String)id2VarNameMap.get(parent.getAttribute(XformConstants.ATTRIBUTE_NAME_BIND) != null ? parent.getAttribute(XformConstants.ATTRIBUTE_NAME_BIND) : parent.getAttribute(XformConstants.ATTRIBUTE_NAME_NODESET));
 				
 				QuestionDef rptQtnDef = formDef.getQuestion(varName);
+				if(rptQtnDef == null && varName.startsWith("/" + formDef.getBinding() + "/")){
+					varName = varName.substring(varName.indexOf('/', 1) + 1);
+					rptQtnDef = formDef.getQuestion(varName);
+				}
+				
 				qtn.setId(getNextQuestionId());
 				rptQtnDef.addRepeatQtnsDef(qtn);
 
+				//We do not want the bind node to be removed from the document as we remove the question
+				Element bindNode = qtn.getBindNode();
+				qtn.setBindNode(null);
+				
 				//This should be before the data and control nodes are set because it removed them.
 				formDef.removeQuestion(qtn);
 
-				qtn.setBindNode(child);
+				//TODO repeat kind bind node is no longer the control node.
+				//qtn.setBindNode(child);
+				qtn.setBindNode(bindNode);
 				qtn.setControlNode(child);
+				
+				//Repeat bindings should not include parent portions
+				//TODO The portion after the && is a real hack and should go away.
+				if(qtn.getBinding().startsWith(varName + "/") && qtn.getBinding().indexOf('/') == qtn.getBinding().lastIndexOf('/'))
+					qtn.setBinding(qtn.getBinding().substring(varName.length() + 1));
 
 				//Remove repeat question constraint if any
 				XformParserUtil.replaceConstraintQtn(constraints,qtn);

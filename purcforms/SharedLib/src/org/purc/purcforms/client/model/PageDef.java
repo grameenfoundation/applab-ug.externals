@@ -3,6 +3,7 @@ package org.purc.purcforms.client.model;
 import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Vector;
 
 import org.purc.purcforms.client.locale.LocaleText;
@@ -41,6 +42,9 @@ public class PageDef implements Serializable{
 
 	/** The form definition to which this page belongs. */
 	private FormDef parent;
+	
+	/** The xpath expression pointing to the corresponding node in the xforms document. */
+	private String xpathExpression;
 
 
 	/**
@@ -63,6 +67,7 @@ public class PageDef implements Serializable{
 		setPageNo(pageDef.getPageNo());
 		setName(pageDef.getName());
 		copyQuestions(pageDef.getQuestions());
+		this.xpathExpression = pageDef.xpathExpression;
 	}
 
 	/**
@@ -324,9 +329,11 @@ public class PageDef implements Serializable{
 		if(qtnDef.getBinding().indexOf('/') == qtnDef.getBinding().lastIndexOf('/')){
 			if(qtnDef.getDataNode() != null && qtnDef.getDataNode().getParentNode() != null)
 				qtnDef.getDataNode().getParentNode().removeChild(qtnDef.getDataNode());
-			if(qtnDef.getBindNode() != null && qtnDef.getBindNode().getParentNode() != null)
-				qtnDef.getBindNode().getParentNode().removeChild(qtnDef.getBindNode());
 		}
+		
+		//for bindings we are safe to delete regardless of the level of nesting.
+		if(qtnDef.getBindNode() != null && qtnDef.getBindNode().getParentNode() != null)
+			qtnDef.getBindNode().getParentNode().removeChild(qtnDef.getBindNode());
 
 		if(formDef != null){
 			formDef.removeQtnFromRules(qtnDef);
@@ -627,7 +634,7 @@ public class PageDef implements Serializable{
 				if(!allQuestionsNew && questionDef.getDataNode() == null)
 					newQuestions.add(questionDef);
 
-				if(questionDef.updateDoc(doc,xformsNode,formDef,formNode,modelNode,(groupNode == null) ? xformsNode : groupNode,true,withData, orgFormVarName)){
+				if(questionDef.updateDoc(doc,xformsNode,formDef,formNode,modelNode,(groupNode == null) ? xformsNode : groupNode,true,withData, orgFormVarName, null)){
 					//for(int k=0; k<i; k++)
 					//moveQuestionUp(questionDef);
 				}
@@ -739,6 +746,24 @@ public class PageDef implements Serializable{
 
 			orderedQtns.add(questionDef); //add the question in the order it was before the refresh.
 
+			
+			//Preserve the previous question ordering even in the xforms document nodes.
+			int newIndex = ((List)questions).indexOf(questionDef);
+			if(index != newIndex){
+				if(newIndex < index){
+					while(newIndex < index){
+						moveQuestionDown(questionDef);
+						newIndex++;
+					}
+				}
+				else{
+					while(newIndex > index){
+						moveQuestionUp(questionDef);
+						newIndex--;
+					}
+				}
+			}
+			
 			/*int index1 = this.getQuestionIndex(qtn.getVariableName());
 			if(index != index1 && index1 != -1 && index < this.getQuestionCount() - 1){
 				this.getQuestions().removeElement(questionDef);
@@ -819,7 +844,7 @@ public class PageDef implements Serializable{
 	 * @param doc the language translation document.
 	 * @param parentLangNode the language parent node for the page language nodes.
 	 */
-	public void buildLanguageNodes(com.google.gwt.xml.client.Document doc, Element parentLangNode){
+	public void buildLanguageNodes(com.google.gwt.xml.client.Document doc, Element parentLangNode, Map<String, String> changedXpaths){
 		//if(labelNode == null || groupNode == null)
 		if(groupNode == null && questions != null && questions.size() > 0){
 			Element controlNode = ((QuestionDef)questions.elementAt(0)).getControlNode();
@@ -838,7 +863,16 @@ public class PageDef implements Serializable{
 				xpath += "[@" + XformConstants.ATTRIBUTE_NAME_ID + "='" + id + "']";
 
 			Element node = doc.createElement(XformConstants.NODE_NAME_TEXT);
-			node.setAttribute(XformConstants.ATTRIBUTE_NAME_XPATH,  xpath + "/" + FormUtil.getNodeName(labelNode));
+			String newXpath = xpath + "/" + FormUtil.getNodeName(labelNode);
+			node.setAttribute(XformConstants.ATTRIBUTE_NAME_XPATH,  newXpath);
+			
+			//Store the old xpath expression for localization processing which identifies us by the previous value.
+			if(this.xpathExpression != null && !newXpath.equalsIgnoreCase(this.xpathExpression)){
+				node.setAttribute(XformConstants.ATTRIBUTE_NAME_PREV_XPATH, this.xpathExpression);
+				changedXpaths.put(this.xpathExpression, newXpath);
+			}
+			this.xpathExpression = newXpath;
+			
 			node.setAttribute(XformConstants.ATTRIBUTE_NAME_VALUE, name);
 			parentLangNode.appendChild(node);
 		}
@@ -847,7 +881,7 @@ public class PageDef implements Serializable{
 			return;
 
 		for(int i=0; i<questions.size(); i++)
-			((QuestionDef)questions.elementAt(i)).buildLanguageNodes(xpath+"/",doc,groupNode,parentLangNode);
+			((QuestionDef)questions.elementAt(i)).buildLanguageNodes(xpath+"/",doc,groupNode,parentLangNode, changedXpaths);
 	}
 
 

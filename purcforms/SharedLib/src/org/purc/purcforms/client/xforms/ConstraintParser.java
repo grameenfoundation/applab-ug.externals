@@ -7,8 +7,10 @@ import java.util.Vector;
 import org.purc.purcforms.client.model.Condition;
 import org.purc.purcforms.client.model.FormDef;
 import org.purc.purcforms.client.model.ModelConstants;
+import org.purc.purcforms.client.model.OptionDef;
 import org.purc.purcforms.client.model.QuestionDef;
 import org.purc.purcforms.client.model.ValidationRule;
+import org.purc.purcforms.client.util.FormUtil;
 
 import com.google.gwt.xml.client.Element;
 
@@ -64,6 +66,12 @@ public class ConstraintParser {
 	 */
 	private static ValidationRule buildValidationRule(FormDef formDef, int questionId, String constraint){
 
+		if(constraint.startsWith("("))
+			constraint = constraint.substring(1);
+		
+		if(constraint.endsWith(")") && !QuestionDef.isDateFunction(constraint))
+			constraint = constraint.substring(0, constraint.length() - 1);
+		
 		ValidationRule validationRule = new ValidationRule(questionId,formDef);
 		validationRule.setConditions(getValidationRuleConditions(formDef,constraint,questionId));
 		validationRule.setConditionsOperator(XformParserUtil.getConditionsOperator(constraint));
@@ -72,8 +80,13 @@ public class ConstraintParser {
 		Element node = questionDef.getBindNode();
 		if(node == null)
 			validationRule.setErrorMessage("");
-		else
-			validationRule.setErrorMessage(node.getAttribute(XformConstants.ATTRIBUTE_NAME_CONSTRAINT_MESSAGE));
+		else{
+			String message = node.getAttribute(XformConstants.ATTRIBUTE_NAME_CONSTRAINT_MESSAGE);
+			if(message == null) //could have been loaded in a format opposite to the one we are using. 
+				message = node.getAttribute(FormUtil.isJavaRosaSaveFormat() ? "message" : "jr:constraintMsg");
+			
+			validationRule.setErrorMessage(message);
+		}
 
 		// If the validation rule has no conditions, then its as good as no rule at all.
 		if(validationRule.getConditions() == null || validationRule.getConditions().size() == 0)
@@ -100,6 +113,39 @@ public class ConstraintParser {
 			if(condition != null)
 				conditions.add(condition);
 		}
+		
+		
+		//TODO Commented out because of being buggy when form is refreshed
+		//Preserve the between operator
+		/*if( (constraint.contains(" and ") && constraint.contains(">") && constraint.contains("<") ) &&
+				(conditions.size() == 2 || (conditions.size() == 3 && XformParserUtil.getConditionsOperator(constraint) == ModelConstants.CONDITIONS_OPERATOR_OR)) ){
+			
+			condition  = new Condition();
+			condition.setId(questionId);
+			condition.setOperator(ModelConstants.OPERATOR_BETWEEN);
+			condition.setQuestionId(questionId);
+			if(constraint.contains("length(.)") || constraint.contains("count(.)"))
+				condition.setFunction(ModelConstants.FUNCTION_LENGTH);
+			
+			condition.setValue(((Condition)conditions.get(0)).getValue());
+			condition.setSecondValue(((Condition)conditions.get(1)).getValue());
+			
+			//This is just for the designer
+			if(condition.getValue().startsWith(formDef.getBinding() + "/"))
+				condition.setValueQtnDef(formDef.getQuestion(condition.getValue().substring(condition.getValue().indexOf('/')+1)));
+			else
+				condition.setBindingChangeListener(formDef.getQuestion(questionId));
+			
+			Condition cond = null;
+			if(conditions.size() == 3)
+				cond = (Condition)conditions.get(2);
+			
+			conditions.clear();
+			conditions.add(condition);
+			
+			if(cond != null)
+				conditions.add(cond);
+		}*/
 
 		return conditions;
 	}
@@ -151,6 +197,8 @@ public class ConstraintParser {
 			//This is just for the designer
 			if(value.startsWith(formDef.getBinding() + "/"))
 				condition.setValueQtnDef(formDef.getQuestion(value.substring(value.indexOf('/')+1)));
+			else
+				condition.setBindingChangeListener(questionDef);
 
 			if(condition.getOperator() == ModelConstants.OPERATOR_NULL)
 				return null; //no operator set hence making the condition invalid

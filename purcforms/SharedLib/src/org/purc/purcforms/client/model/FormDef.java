@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.Vector;
 import java.util.Map.Entry;
 
@@ -91,6 +92,9 @@ public class FormDef implements Serializable{
 	/** The language xml for this form. */
 	private String languageXml;
 
+	/** The xpath expression pointing to the corresponding node in the xforms document. */
+	private String xpathExpression;
+
 	/** 
 	 * Flag to determine if we can change the form structure.
 	 * For a read only form, we can only change the Text and Help Text.
@@ -124,9 +128,10 @@ public class FormDef implements Serializable{
 		setId(formDef.getId());
 		setName(formDef.getName());
 		setFormKey(formDef.getFormKey());
+		this.xpathExpression = formDef.xpathExpression;
 
 		//I just don't think we need this in addition to the id
-		setVariableName(formDef.getBinding());
+		setBinding(formDef.getBinding());
 
 		setDescriptionTemplate(formDef.getDescriptionTemplate());
 		copyPages(formDef.getPages());
@@ -156,7 +161,7 @@ public class FormDef implements Serializable{
 		setFormKey(formKey);
 
 		//I just don't think we need this in addition to the id
-		setVariableName(variableName);
+		setBinding(variableName);
 
 		setPages(pages);
 		setSkipRules(skipRules);
@@ -165,7 +170,7 @@ public class FormDef implements Serializable{
 		setDescriptionTemplate((descTemplate == null) ? ModelConstants.EMPTY_STRING : descTemplate);
 		setCalculations(calculations);
 	}
-	
+
 	public void addPage(PageDef pageDef){
 		addPage(pageDef, null);
 	}
@@ -183,7 +188,7 @@ public class FormDef implements Serializable{
 			pages.add(pageDef);
 		else
 			pages.add(pages.indexOf(refPageDef) + 1, pageDef);
-		
+
 		pageDef.setParent(this);
 	}
 
@@ -276,8 +281,8 @@ public class FormDef implements Serializable{
 		return binding;
 	}
 
-	public void setVariableName(String variableName) {
-		this.binding = variableName;
+	public void setBinding(String binding) {
+		this.binding = binding;
 	}
 
 	public int getId() {
@@ -368,6 +373,14 @@ public class FormDef implements Serializable{
 		this.readOnly = readOnly;
 	}
 
+	public String getXpathExpression() {
+		return xpathExpression;
+	}
+
+	public void setXpathExpression(String xpathExpression) {
+		this.xpathExpression = xpathExpression;
+	}
+
 	/**
 	 * Gets the first skip rule which has a given question as one of its targets.
 	 * 
@@ -381,9 +394,11 @@ public class FormDef implements Serializable{
 		for(int i=0; i<skipRules.size(); i++){
 			SkipRule rule = (SkipRule)skipRules.elementAt(i);
 			Vector targets = rule.getActionTargets();
-			for(int j=0; j<targets.size(); j++){
-				if(((Integer)targets.elementAt(j)).intValue() == questionDef.getId())
-					return rule;
+			if(targets != null){
+				for(int j=0; j<targets.size(); j++){
+					if(((Integer)targets.elementAt(j)).intValue() == questionDef.getId())
+						return rule;
+				}
 			}
 		}
 
@@ -428,6 +443,12 @@ public class FormDef implements Serializable{
 	 * @param withData set to true if you want question answers to also be saved as part of the xform.
 	 */
 	public void updateDoc(boolean withData){
+
+		//JR prefix may not have been set and we try set the jr:constraintMessage during
+		//validation rule update, which will throw exceptions.
+		if(FormUtil.isJavaRosaSaveFormat())
+			doc.getDocumentElement().setAttribute("xmlns:jr", "http://openrosa.org/javarosa");
+
 		dataNode.setAttribute(XformConstants.ATTRIBUTE_NAME_NAME, name);
 
 		//TODO Check that this comment out does not introduce bugs
@@ -511,7 +532,7 @@ public class FormDef implements Serializable{
 							node.getParentNode().removeChild(node);
 						else
 							node.getParentNode().getParentNode().removeChild(node.getParentNode());
-						
+
 						childQuestionDef.setFirstOptionNode(null);
 					}
 
@@ -1272,9 +1293,11 @@ public class FormDef implements Serializable{
 
 		//Clear existing validation rules if any. Already existing validation rules 
 		//will always overwrite those from the refresh source.
-		validationRules = new Vector();
-		for(int index = 0; index < formDef.getValidationRuleCount(); index++)
-			formDef.getValidationRuleAt(index).refresh(this, formDef);
+		if(!FormUtil.overwriteValidationsOnRefresh()){
+			validationRules = new Vector();
+			for(int index = 0; index < formDef.getValidationRuleCount(); index++)
+				formDef.getValidationRuleAt(index).refresh(this, formDef);
+		}
 
 		//If we already had dynamic options, they will always overwrite all 
 		//from the refresh source.
@@ -1363,7 +1386,7 @@ public class FormDef implements Serializable{
 			getValidationRuleAt(index).updateConditionValue(origValue, newValue);
 	}
 
-	public Element getLanguageNode() {
+	public Element getLanguageNode(Map<String, String> changedXpaths) {
 		com.google.gwt.xml.client.Document doc = XMLParser.createDocument();
 		doc.appendChild(doc.createProcessingInstruction("xml", "version=\"1.0\" encoding=\"UTF-8\""));
 		Element rootNode = doc.createElement("xform");
@@ -1372,24 +1395,44 @@ public class FormDef implements Serializable{
 
 		if(dataNode != null){
 			Element node = doc.createElement(XformConstants.NODE_NAME_TEXT);
-			node.setAttribute(XformConstants.ATTRIBUTE_NAME_XPATH, FormUtil.getNodePath(dataNode)+"[@name]");
+			String xpath = FormUtil.getNodePath(dataNode)+"[@name]";
+
+			if(FormUtil.isJavaRosaSaveFormat() && xpath.startsWith("model[@id='"))
+				xpath = "html/head/" + xpath;
+
+			node.setAttribute(XformConstants.ATTRIBUTE_NAME_XPATH, xpath);
+
+			//Store the old xpath expression for localization processing which identifies us by the previous value.
+			if(this.xpathExpression != null && !xpath.equalsIgnoreCase(this.xpathExpression)){
+				node.setAttribute(XformConstants.ATTRIBUTE_NAME_PREV_XPATH, this.xpathExpression);
+				changedXpaths.put(this.xpathExpression, xpath);
+			}
+			this.xpathExpression = xpath;
+
 			node.setAttribute(XformConstants.ATTRIBUTE_NAME_VALUE, name);
 			rootNode.appendChild(node);
 
+			if(FormUtil.isJavaRosaSaveFormat()){
+				node = doc.createElement(XformConstants.NODE_NAME_TEXT);
+				node.setAttribute(XformConstants.ATTRIBUTE_NAME_XPATH, "html/head/title");
+				node.setAttribute(XformConstants.ATTRIBUTE_NAME_VALUE, name);
+				rootNode.appendChild(node);
+			}
+
 			if(pages != null){
 				for(int index = 0; index < pages.size(); index++)
-					((PageDef)pages.elementAt(index)).buildLanguageNodes(doc, rootNode);
+					((PageDef)pages.elementAt(index)).buildLanguageNodes(doc, rootNode, changedXpaths);
 			}
 
 			if(validationRules != null){
 				for(int index = 0; index < validationRules.size(); index++)
-					((ValidationRule)validationRules.elementAt(index)).buildLanguageNodes(this, rootNode);
+					((ValidationRule)validationRules.elementAt(index)).buildLanguageNodes(this, rootNode, changedXpaths);
 			}
 
 			if(dynamicOptions != null){
 				Iterator<Entry<Integer,DynamicOptionDef>> iterator = dynamicOptions.entrySet().iterator();
 				while(iterator.hasNext())
-					iterator.next().getValue().buildLanguageNodes(this, rootNode);
+					iterator.next().getValue().buildLanguageNodes(this, rootNode, changedXpaths);
 			}
 		}
 
